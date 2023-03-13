@@ -1,6 +1,27 @@
 # xla_fp8_testing
 
-## Run the benchmark in fp8 + mixed precision
+## Run the benchmark
+
+### With the fp32 precision
+
+```bash
+python benchmark.py
+```
+
+### With the fp32 + fp8 precision
+
+```bash
+TF_CPP_VMODULE=gemm_rewriter=1 TF_XLA_FLAGS="--tf_xla_auto_jit=2" \
+    XLA_FLAGS="--xla_gpu_enable_cublaslt=true" python benchmark.py --fp8
+```
+
+### With the mixed precision
+
+```bash
+python benchmark.py --mixed
+```
+
+### With the mixed + fp8 precision
 
 ```bash
 TF_CPP_VMODULE=gemm_rewriter=1 TF_XLA_FLAGS="--tf_xla_auto_jit=2" \

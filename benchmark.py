@@ -229,9 +229,8 @@ def speedometer(
       output = model(xx, **forward_kwargs)
       loss = tf.math.square(output - y)
     dx, dvars = tape.gradient(loss, [xx, model.trainable_variables])
-    #opt.apply_gradients(zip(dvars, model.trainable_variables))
-    #xx = xx - dx
     return output, dx, dvars
+
   # Warmup runs
   for _ in range(warmup_iters):
     out, dx, dvars = run_training()
