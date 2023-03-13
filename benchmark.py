@@ -9,7 +9,7 @@ dropout_rate = 0.0
 model_size_scale = 1
 from tensorflow.python.framework import dtypes
 import DenseFp8 as dense_fp8
-tf.config.experimental.enable_tensor_float_32_execution(False)
+
 parser = argparse.ArgumentParser(description='config')
 parser.add_argument('--fp8', action='store_true', help='use_fp8')
 parser.add_argument('--mixed', action='store_true', help='mixed_precision')
@@ -18,8 +18,6 @@ args = parser.parse_args()
 
 model_size_scale = args.scale
 use_fp8 = args.fp8
-# bmm always no use fp8
-use_fp8_bmm = False
 use_mixed = args.mixed
 print("DEBUG: use_fp8", use_fp8)
 print("DEBUG: use_mixed", use_mixed)
@@ -27,21 +25,11 @@ print("DEBUG: model_scale", model_size_scale)
 
 if use_mixed:
   tf.keras.mixed_precision.set_global_policy('mixed_float16')
-
-oldDense = layers.Dense
+ext_kwargs = {}
 if use_fp8:
-  layers.Dense = dense_fp8.DenseFp8
+  ext_kwargs["is_last"] = True
 
-init_val_scalar = 0.8
-
-if use_fp8:
-  FAKE_E4M3 = dtypes.float8_e4m3fn
-  FAKE_E5M2 = dtypes.float8_e5m2
-
-E4M3_MAX = 448.0
-E5M2_MAX = 57344.0
-AMAX_HIS_LEN = 16
-
+DenseLayer = dense_fp8.DenseFp8 if use_fp8 else layers.Dense
 
 class DotProductAttention(tf.keras.Model):
   """Attention operation in Transformer layer"""
@@ -123,12 +111,9 @@ class BasicMLP(tf.keras.Model):
       ffn_hidden_size: int,
   ):
     super().__init__()
-    if use_fp8:
-      self.linear1 = layers.Dense(ffn_hidden_size, use_bias=True, is_last=True)
-      self.linear2 = layers.Dense(hidden_size, use_bias=True, is_last=True)
-    else:
-      self.linear1 = oldDense(ffn_hidden_size, use_bias=True)
-      self.linear2 = oldDense(hidden_size, use_bias=True)
+
+    self.linear1 = DenseLayer(ffn_hidden_size, use_bias=True, **ext_kwargs)
+    self.linear2 = DenseLayer(hidden_size, use_bias=True, **ext_kwargs)
 
   def call(self, x: tf.Tensor) -> tf.Tensor:
     x = self.linear1(x)
@@ -152,14 +137,11 @@ class BasicTransformer(tf.keras.Model):
     self.kv_channels = hidden_size // num_attention_heads
     self.ln1 = layers.LayerNormalization(epsilon=layernorm_eps)
 
-    if use_fp8:
-      self.qkv_projection = layers.Dense(
-          3 * hidden_size,
-          use_bias=True,
-          is_last=True,
-      )
-    else:
-      self.qkv_projection = oldDense(3 * hidden_size, use_bias=True)
+    self.qkv_projection = DenseLayer(
+        3 * hidden_size,
+        use_bias=True,
+        **ext_kwargs,
+    )
 
     self.attention = DotProductAttention(
         num_attention_heads=num_attention_heads,
@@ -167,10 +149,7 @@ class BasicTransformer(tf.keras.Model):
         attention_dropout=attention_dropout,
     )
 
-    if use_fp8:
-      self.projection = layers.Dense(hidden_size, use_bias=True, is_last=True)
-    else:
-      self.projection = oldDense(hidden_size, use_bias=True)
+    self.projection = DenseLayer(hidden_size, use_bias=True, **ext_kwargs)
 
     self.dropout = layers.Dropout(hidden_dropout)
     self.ln2 = layers.LayerNormalization(epsilon=layernorm_eps)
@@ -179,42 +158,38 @@ class BasicTransformer(tf.keras.Model):
         ffn_hidden_size=ffn_hidden_size,
     )
 
-  @tf.function(jit_compile=True)
   def call(
       self,
       x: tf.Tensor,
       #      attention_mask: tf.Tensor,
   ) -> tf.Tensor:
     res = x
-    with tf.xla.experimental.jit_scope(compile_ops=False):
-      with tf.xla.experimental.jit_scope():
-        x = self.ln1(x)
-  
-        # Fused QKV projection
-        qkv = self.qkv_projection(x)
-      qkv_shape = qkv.shape
-      qkv = tf.reshape(
-          qkv,
-          shape=(
-              qkv_shape[0],
-              qkv_shape[1],
-              self.num_attention_heads,
-              3 * self.kv_channels,
-          ),
-      )
-      q, k, v = tf.split(qkv, 3, axis=3)
-  
-      attention_mask = None
-      x = self.attention(q, k, v, attention_mask)
-      x = self.projection(x)
-      x = self.dropout(x)
-      x = res + x
-      res = x
-      with tf.xla.experimental.jit_scope():
-        x = self.ln2(x)
-        x = self.mlp(x)
+    x = self.ln1(x)
 
-      return x + res
+    # Fused QKV projection
+    qkv = self.qkv_projection(x)
+    qkv_shape = qkv.shape
+    qkv = tf.reshape(
+        qkv,
+        shape=(
+            qkv_shape[0],
+            qkv_shape[1],
+            self.num_attention_heads,
+            3 * self.kv_channels,
+        ),
+    )
+    q, k, v = tf.split(qkv, 3, axis=3)
+
+    attention_mask = None
+    x = self.attention(q, k, v, attention_mask)
+    x = self.projection(x)
+    x = self.dropout(x)
+    x = res + x
+    res = x
+    x = self.ln2(x)
+    x = self.mlp(x)
+
+    return x + res
 
 # Layer configuration
 hidden_size = 4096 * model_size_scale
@@ -246,8 +221,8 @@ def speedometer(
     print("xxx variable name:", v.name)
   for v in model.trainable_variables:
     print("xxx trainable variable name:", v.name)
-  
-#    @tf.function(jit_compile=True)
+
+  @tf.function(jit_compile=True)
   def run_training(xx=x):
     with tf.GradientTape(persistent=True) as tape:
       tape.watch(xx)
@@ -260,18 +235,18 @@ def speedometer(
   # Warmup runs
   for _ in range(warmup_iters):
     out, dx, dvars = run_training()
-  
+
   print((p + 1.)) # Sync the GPU
-  
+
   # Timing runs
   start = time.time()
   for _ in range(timing_iters):
     out, dx, dvars = run_training()
   print((p + 1.)) # Sync the GPU
   end = time.time()
-  
+
   elapsed_time = (end - start) / timing_iters * 1000
-  
+
   print(f"Mean time: {elapsed_time} ms")
   print("xxx check dx:")
   print(dx[0, 0], out.shape, x.shape)
@@ -284,7 +259,7 @@ x_data = tf.random.normal(shape=(batch_size, sequence_length, hidden_size),
                           dtype=dtype)
 y_data = tf.random.normal(shape=(batch_size, sequence_length, hidden_size * 3),
                           dtype=dtype)
-y_dtype = tf.float16 if use_mixed else tf.float32 
+y_dtype = tf.float16 if use_mixed else tf.float32
 
 y_data = tf.random.normal(x_data.shape,dtype=y_dtype)
 
@@ -309,4 +284,3 @@ speedometer(
 )
 
 print(basic_transformer.summary())
-
