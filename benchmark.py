@@ -282,4 +282,5 @@ speedometer(
     forward_kwargs={"training": True},
 )
 
-print(basic_transformer.summary())
+# Print out the summary of the model.
+basic_transformer.summary()
