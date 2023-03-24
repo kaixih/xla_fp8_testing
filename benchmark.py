@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser(description='config')
 parser.add_argument('--fp8', action='store_true', help='use_fp8')
 parser.add_argument('--mixed', action='store_true', help='mixed_precision')
 parser.add_argument('--scale', type=int, help='model_scale', default=1)
-parser.add_argument('--nobyte16', action='store_false', help='use_nobyte16')
+parser.add_argument('--nobyte16', action='store_true', help='use_nobyte16')
 args = parser.parse_args()
 
 model_size_scale = args.scale
