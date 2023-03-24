@@ -14,14 +14,17 @@ parser = argparse.ArgumentParser(description='config')
 parser.add_argument('--fp8', action='store_true', help='use_fp8')
 parser.add_argument('--mixed', action='store_true', help='mixed_precision')
 parser.add_argument('--scale', type=int, help='model_scale', default=1)
+parser.add_argument('--nobyte16', action='store_false', help='use_nobyte16')
 args = parser.parse_args()
 
 model_size_scale = args.scale
 use_fp8 = args.fp8
 use_mixed = args.mixed
+use_nobyte16 = args.nobyte16
 print("DEBUG: use_fp8", use_fp8)
 print("DEBUG: use_mixed", use_mixed)
 print("DEBUG: model_scale", model_size_scale)
+print("DEBUG: nobyte16", use_nobyte16)
 
 if use_mixed:
   tf.keras.mixed_precision.set_global_policy('mixed_float16')
@@ -193,7 +196,7 @@ class BasicTransformer(tf.keras.Model):
 
 # Layer configuration
 hidden_size = 4096 * model_size_scale
-sequence_length = 2048
+sequence_length = 2048 + int(use_nobyte16)
 batch_size = 4
 ffn_hidden_size = 16384 * model_size_scale
 num_attention_heads = 32

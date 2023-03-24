@@ -28,6 +28,13 @@ TF_CPP_VMODULE=gemm_rewriter=1 TF_XLA_FLAGS="--tf_xla_auto_jit=2" \
     XLA_FLAGS="--xla_gpu_enable_cublaslt=true" python benchmark.py --fp8 --mixed
 ```
 
+### With no multiple of 16 seq len
+
+```bash
+TF_CPP_VMODULE=gemm_rewriter=1 TF_XLA_FLAGS="--tf_xla_auto_jit=2" \
+    XLA_FLAGS="--xla_gpu_enable_cublaslt=true" python benchmark.py --fp8 --mixed --nobyte16
+```
+
 ## Dump HLO graphs
 
 ```bash
